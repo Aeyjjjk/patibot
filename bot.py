@@ -17,7 +17,8 @@ NEWSAPI_KEY = os.getenv("NEWSAPI_KEY")
 GNEWS_KEY = os.getenv("GNEWS_KEY")
 MEDIASTACK_KEY = os.getenv("MEDIASTACK_KEY")
 
-KEYWORDS = ["Donald Trump", "Jerome Powell"]
+# Keywords we want to monitor
+KEYWORDS = ["Donald Trump", "Jerome Powell", "Non-Farm Payrolls", "NFP", "Consumer Price Index", "CPI"]
 
 # Track user subscriptions
 subscribers = {}
@@ -36,7 +37,7 @@ def get_sentiment(text: str) -> str:
         return "⚖️ neutral"
 
 def get_priority(text: str) -> str:
-    high_priority_words = ["urgent", "breaking", "crisis", "announcement", "decision", "meeting", "speech"]
+    high_priority_words = ["urgent", "breaking", "crisis", "announcement", "decision", "meeting", "speech", "jobs", "inflation"]
     if any(word.lower() in text.lower() for word in high_priority_words):
         return "🔥 HIGH"
     elif "report" in text.lower() or "update" in text.lower():
@@ -76,8 +77,6 @@ def fetch_news_mediastack():
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /start command and subscribe user"""
     chat_id = update.effective_chat.id
-
-    # Mark this user as active
     subscribers[chat_id] = True
 
     # Welcome message
@@ -85,7 +84,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         chat_id=chat_id,
         text=(
             "👋 Hello! I am now online and listening for news updates.\n\n"
-            "✅ I’ll track fresh stories about Donald Trump & Jerome Powell.\n"
+            "✅ I’ll track fresh stories about Donald Trump, Jerome Powell, NFP, and CPI.\n"
             "📰 Each update will include:\n"
             "- Sentiment (📈 +ve / 📉 -ve / ⚖️ neutral)\n"
             "- Priority level (🔥 HIGH / ⚡ MEDIUM / 🟢 LOW)\n\n"
@@ -95,7 +94,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     # Example sample news
-    sample_news = "Donald Trump to hold urgent meeting on economy - https://example.com/news"
+    sample_news = "CPI inflation report shows unexpected rise - https://example.com/news"
     sample_sentiment = get_sentiment(sample_news)
     sample_priority = get_priority(sample_news)
 
@@ -147,13 +146,20 @@ async def news_loop(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
         except Exception as e:
             print("Error in loop:", e)
 
-        await asyncio.sleep(1800)  # wait 5 mins before checking again
+        await asyncio.sleep(1800)  # wait 30 mins before checking again
 
 async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Unsubscribe user"""
     chat_id = update.effective_chat.id
     subscribers[chat_id] = False
     await context.bot.send_message(chat_id=chat_id, text="🛑 You have stopped receiving news updates.")
+
+# Manual commands for NFP & CPI
+async def nfp(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("💼 Tracking latest Non-Farm Payrolls news... updates will appear automatically.")
+
+async def cpi(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("📊 Tracking latest Consumer Price Index (CPI) news... updates will appear automatically.")
 
 # === Main ===
 def main():
@@ -162,6 +168,8 @@ def main():
     # Register handlers
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("stop", stop))
+    application.add_handler(CommandHandler("nfp", nfp))
+    application.add_handler(CommandHandler("cpi", cpi))
 
     # Run bot
     application.run_polling()
