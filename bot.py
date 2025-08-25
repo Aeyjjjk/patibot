@@ -4,7 +4,6 @@ import pytz
 import asyncio
 from dotenv import load_dotenv
 from datetime import datetime
-from textblob import TextBlob
 from telegram import Update
 from telegram.constants import ParseMode
 from telegram.ext import Application, CommandHandler, ContextTypes
@@ -54,13 +53,17 @@ def get_today() -> str:
     return datetime.now(pytz.UTC).strftime("%Y-%m-%d")
 
 def get_sentiment(text: str) -> str:
-    polarity = TextBlob(text).sentiment.polarity
-    if polarity > 0.1:
-        return "📈 +ve"
-    elif polarity < -0.1:
-        return "📉 -ve"
+    """Lightweight sentiment detector using keyword matching."""
+    text_l = text.lower()
+    positive = ["gain", "growth", "rise", "optimistic", "positive", "bullish", "strong", "surge", "profit"]
+    negative = ["fall", "drop", "loss", "crisis", "bearish", "weak", "negative", "decline", "debt"]
+
+    if any(w in text_l for w in positive):
+        return "🙂 Positive"
+    elif any(w in text_l for w in negative):
+        return "☹️ Negative"
     else:
-        return "⚖️ neutral"
+        return "😐 Neutral"
 
 def get_priority(text: str) -> str:
     high_priority_words = [
@@ -166,9 +169,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text=(
             "👋 Hello! I'm online and tracking news about Donald Trump, Jerome Powell, "
             "Non-Farm Payrolls (NFP), and Consumer Price Index (CPI).\n\n"
-            "Each update includes:\n"
-            "• Sentiment (📈 +ve / 📉 -ve / ⚖️ neutral)\n"
-            "• Priority (🔥 HIGH / ⚡ MEDIUM / 🟢 LOW)\n\n"
             "Here’s a sample of how updates look:"
         ),
         parse_mode=ParseMode.HTML,
