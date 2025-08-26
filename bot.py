@@ -1,6 +1,7 @@
 import requests
 import os
 import pytz
+import json
 import asyncio
 from dotenv import load_dotenv
 from datetime import datetime, timedelta
@@ -16,41 +17,54 @@ NEWSAPI_KEY = os.getenv("NEWSAPI_KEY")
 GNEWS_KEY = os.getenv("GNEWS_KEY")
 MEDIASTACK_KEY = os.getenv("MEDIASTACK_KEY")
 
-# Broad watch list (background loop)
+# === Settings ===
 MASTER_KEYWORDS = [
-    "Donald Trump",
-    "Jerome Powell",
-    "Non-Farm Payrolls",
-    "NFP",
-    "Consumer Price Index",
-    "CPI",
+    "Donald Trump", "Jerome Powell", "Non-Farm Payrolls", "NFP",
+    "Consumer Price Index", "CPI"
 ]
-
-# Narrow, topic-specific keyword sets (for /nfp and /cpi)
 NFP_KEYWORDS = [
-    "Non-Farm Payrolls",
-    "NFP",
-    "jobs report",
-    "employment report",
-    "payrolls",
-    "BLS jobs",
-    "unemployment rate",
+    "Non-Farm Payrolls", "NFP", "jobs report", "employment report",
+    "payrolls", "BLS jobs", "unemployment rate"
 ]
 CPI_KEYWORDS = [
-    "Consumer Price Index",
-    "CPI",
-    "inflation",
-    "inflation report",
-    "inflation data",
-    "price index",
+    "Consumer Price Index", "CPI", "inflation", "inflation report",
+    "inflation data", "price index"
 ]
 
-# Track user subscriptions (per-chat loop)
+STORAGE_FILE = "news_storage.json"
+EXPIRY_DAYS = 3  # auto-expire storage after 3 days
+CHECK_INTERVAL = 300  # 5 minutes
+
+# Track user subscriptions
 subscribers: dict[int, bool] = {}
+
+# === Storage Helpers ===
+def load_storage() -> dict:
+    if not os.path.exists(STORAGE_FILE):
+        return {}
+    try:
+        with open(STORAGE_FILE, "r") as f:
+            data = json.load(f)
+    except json.JSONDecodeError:
+        return {}
+
+    cutoff = datetime.now(pytz.UTC) - timedelta(days=EXPIRY_DAYS)
+    fresh = {
+        k: v for k, v in data.items()
+        if datetime.fromisoformat(v["timestamp"]) > cutoff
+    }
+    return fresh
+
+def save_storage(storage: dict):
+    with open(STORAGE_FILE, "w") as f:
+        json.dump(storage, f, indent=2)
+
+def mark_sent(storage: dict, headline: str):
+    storage[headline] = {"timestamp": datetime.now(pytz.UTC).isoformat()}
+    save_storage(storage)
 
 # === Helpers ===
 def get_date_range(days: int = 3) -> tuple[str, str]:
-    """Return (from_date, to_date) for last N days in YYYY-MM-DD format."""
     to_date = datetime.now(pytz.UTC).strftime("%Y-%m-%d")
     from_date = (datetime.now(pytz.UTC) - timedelta(days=days)).strftime("%Y-%m-%d")
     return from_date, to_date
@@ -59,7 +73,6 @@ def get_sentiment(text: str) -> str:
     text_l = text.lower()
     positive = ["gain", "growth", "rise", "optimistic", "positive", "bullish", "strong", "surge", "profit"]
     negative = ["fall", "drop", "loss", "crisis", "bearish", "weak", "negative", "decline", "debt"]
-
     if any(w in text_l for w in positive):
         return "🙂 Positive"
     elif any(w in text_l for w in negative):
@@ -80,15 +93,18 @@ def priority_score(label: str) -> int:
     return {"🔥 HIGH": 3, "⚡ MEDIUM": 2, "🟢 LOW": 1}.get(label, 0)
 
 def dedupe_keep_order(items: list[str]) -> list[str]:
-    seen = set()
-    out = []
+    seen, out = set(), []
     for x in items:
         if x not in seen:
             seen.add(x)
             out.append(x)
     return out
 
-# === News Fetchers (parameterized by keywords) ===
+def filter_headlines(headlines: list[str], keywords: list[str]) -> list[str]:
+    keywords_lower = [k.lower() for k in keywords]
+    return [h for h in headlines if any(k in h.lower() for k in keywords_lower)]
+
+# === News Fetchers ===
 def fetch_news_newsapi(keywords: list[str]) -> list[str]:
     if not NEWSAPI_KEY:
         return []
@@ -99,7 +115,6 @@ def fetch_news_newsapi(keywords: list[str]) -> list[str]:
         f"&from={from_date}&to={to_date}&sortBy=publishedAt"
     )
     r = requests.get(url, timeout=20).json()
-    print("NewsAPI response:", r.get("status"), "Articles:", len(r.get("articles", [])))
     return [f"{a.get('title','').strip()} - {a.get('url','')}"
             for a in r.get("articles", []) if a.get("title") and a.get("url")]
 
@@ -113,7 +128,6 @@ def fetch_news_gnews(keywords: list[str]) -> list[str]:
         f"&from={from_date}&to={to_date}"
     )
     r = requests.get(url, timeout=20).json()
-    print("GNews response:", r.get("totalArticles"))
     return [f"{a.get('title','').strip()} - {a.get('url','')}"
             for a in r.get("articles", []) if a.get("title") and a.get("url")]
 
@@ -127,7 +141,6 @@ def fetch_news_mediastack(keywords: list[str]) -> list[str]:
         f"&date={from_date},{to_date}"
     )
     r = requests.get(url, timeout=20).json()
-    print("Mediastack response:", len(r.get("data", [])))
     return [f"{a.get('title','').strip()} - {a.get('url','')}"
             for a in r.get("data", []) if a.get("title") and a.get("url")]
 
@@ -136,9 +149,10 @@ def aggregate_news(keywords: list[str]) -> list[str]:
     all_news.extend(fetch_news_newsapi(keywords))
     all_news.extend(fetch_news_gnews(keywords))
     all_news.extend(fetch_news_mediastack(keywords))
-    return dedupe_keep_order(all_news)
+    deduped = dedupe_keep_order(all_news)
+    return filter_headlines(deduped, keywords)
 
-# === Sending helpers ===
+# === Sending Helpers ===
 async def send_headlines(chat_id: int, context: ContextTypes.DEFAULT_TYPE, headlines: list[str], limit: int = 5):
     if not headlines:
         await context.bot.send_message(chat_id=chat_id, text="No fresh headlines found yet. I’ll keep watching 👀")
@@ -170,9 +184,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode=ParseMode.HTML,
     )
 
-    sample = "CPI inflation report shows unexpected rise - https://example.com/news"
-    await send_headlines(chat_id, context, [sample], limit=1)
-
     asyncio.create_task(news_loop(context, chat_id))
 
 async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -192,16 +203,16 @@ async def cpi(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await context.bot.send_message(chat_id=chat_id, text="📊 Latest CPI headlines:")
     await send_headlines(chat_id, context, headlines, limit=5)
 
-# === Per-user background loop ===
+# === Background Loop with Storage ===
 async def news_loop(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
-    sent_articles: set[str] = set()
+    storage = load_storage()
 
     while subscribers.get(chat_id, False):
         try:
             headlines = aggregate_news(MASTER_KEYWORDS)
 
             for h in headlines:
-                if h in sent_articles:
+                if h in storage:
                     continue
                 sent = get_sentiment(h)
                 pr = get_priority(h)
@@ -213,23 +224,20 @@ async def news_loop(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
                     parse_mode=ParseMode.HTML,
                     disable_web_page_preview=False,
                 )
-                sent_articles.add(h)
+                mark_sent(storage, h)
 
         except Exception as e:
             print("Error in loop:", e)
 
-        # Check every 5 minutes
-        await asyncio.sleep(300)
+        await asyncio.sleep(CHECK_INTERVAL)
 
 # === Main ===
 def main():
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
-
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("stop", stop))
     application.add_handler(CommandHandler("nfp", nfp))
     application.add_handler(CommandHandler("cpi", cpi))
-
     application.run_polling()
 
 if __name__ == "__main__":
