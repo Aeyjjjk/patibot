@@ -33,7 +33,7 @@ CPI_KEYWORDS = [
 
 STORAGE_FILE = "news_storage.json"
 EXPIRY_DAYS = 3  # auto-expire storage after 3 days
-CHECK_INTERVAL = 300  # 5 minutes
+CHECK_INTERVAL = 3600  # 5 minutes
 
 # Track user subscriptions
 subscribers: dict[int, bool] = {}
@@ -180,7 +180,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await context.bot.send_message(
         chat_id=chat_id,
-        text="👋 Hello! I’ll track financial/economic news for you. Updates every 5 minutes.",
+        text="👋 Hello! I’ll track financial/economic news for you. Updates every 60 minutes.",
         parse_mode=ParseMode.HTML,
     )
 
