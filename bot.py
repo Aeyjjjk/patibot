@@ -3,7 +3,7 @@ import os
 import pytz
 import asyncio
 from dotenv import load_dotenv
-from datetime import datetime
+from datetime import datetime, timedelta
 from telegram import Update
 from telegram.constants import ParseMode
 from telegram.ext import Application, CommandHandler, ContextTypes
@@ -49,11 +49,13 @@ CPI_KEYWORDS = [
 subscribers: dict[int, bool] = {}
 
 # === Helpers ===
-def get_today() -> str:
-    return datetime.now(pytz.UTC).strftime("%Y-%m-%d")
+def get_date_range(days: int = 3) -> tuple[str, str]:
+    """Return (from_date, to_date) for last N days in YYYY-MM-DD format."""
+    to_date = datetime.now(pytz.UTC).strftime("%Y-%m-%d")
+    from_date = (datetime.now(pytz.UTC) - timedelta(days=days)).strftime("%Y-%m-%d")
+    return from_date, to_date
 
 def get_sentiment(text: str) -> str:
-    """Lightweight sentiment detector using keyword matching."""
     text_l = text.lower()
     positive = ["gain", "growth", "rise", "optimistic", "positive", "bullish", "strong", "surge", "profit"]
     negative = ["fall", "drop", "loss", "crisis", "bearish", "weak", "negative", "decline", "debt"]
@@ -66,10 +68,6 @@ def get_sentiment(text: str) -> str:
         return "😐 Neutral"
 
 def get_priority(text: str) -> str:
-    high_priority_words = [
-        "urgent", "breaking", "crisis", "announcement", "decision",
-        "meeting", "speech", "jobs", "inflation", "report", "data", "release"
-    ]
     text_l = text.lower()
     if any(w in text_l for w in ["urgent", "breaking", "crisis", "announcement", "decision", "meeting", "speech"]):
         return "🔥 HIGH"
@@ -94,41 +92,46 @@ def dedupe_keep_order(items: list[str]) -> list[str]:
 def fetch_news_newsapi(keywords: list[str]) -> list[str]:
     if not NEWSAPI_KEY:
         return []
+    from_date, to_date = get_date_range(3)
     url = (
         f"https://newsapi.org/v2/everything?"
         f"q={' OR '.join(keywords)}&apiKey={NEWSAPI_KEY}&language=en"
-        f"&from={get_today()}&to={get_today()}&sortBy=publishedAt"
+        f"&from={from_date}&to={to_date}&sortBy=publishedAt"
     )
     r = requests.get(url, timeout=20).json()
+    print("NewsAPI response:", r.get("status"), "Articles:", len(r.get("articles", [])))
     return [f"{a.get('title','').strip()} - {a.get('url','')}"
             for a in r.get("articles", []) if a.get("title") and a.get("url")]
 
 def fetch_news_gnews(keywords: list[str]) -> list[str]:
     if not GNEWS_KEY:
         return []
+    from_date, to_date = get_date_range(3)
     url = (
         f"https://gnews.io/api/v4/search?"
         f"q={' OR '.join(keywords)}&lang=en&token={GNEWS_KEY}"
-        f"&from={get_today()}&to={get_today()}"
+        f"&from={from_date}&to={to_date}"
     )
     r = requests.get(url, timeout=20).json()
+    print("GNews response:", r.get("totalArticles"))
     return [f"{a.get('title','').strip()} - {a.get('url','')}"
             for a in r.get("articles", []) if a.get("title") and a.get("url")]
 
 def fetch_news_mediastack(keywords: list[str]) -> list[str]:
     if not MEDIASTACK_KEY:
         return []
+    from_date, to_date = get_date_range(3)
     url = (
         f"http://api.mediastack.com/v1/news?"
         f"access_key={MEDIASTACK_KEY}&keywords={' OR '.join(keywords)}&languages=en"
-        f"&date={get_today()}"
+        f"&date={from_date},{to_date}"
     )
     r = requests.get(url, timeout=20).json()
+    print("Mediastack response:", len(r.get("data", [])))
     return [f"{a.get('title','').strip()} - {a.get('url','')}"
             for a in r.get("data", []) if a.get("title") and a.get("url")]
 
 def aggregate_news(keywords: list[str]) -> list[str]:
-    # pull from all, dedupe, keep order
     all_news = []
     all_news.extend(fetch_news_newsapi(keywords))
     all_news.extend(fetch_news_gnews(keywords))
@@ -141,7 +144,6 @@ async def send_headlines(chat_id: int, context: ContextTypes.DEFAULT_TYPE, headl
         await context.bot.send_message(chat_id=chat_id, text="No fresh headlines found yet. I’ll keep watching 👀")
         return
 
-    # Rank by priority (HIGH→LOW), then keep original order
     scored = []
     for h in headlines:
         pr = get_priority(h)
@@ -159,43 +161,32 @@ async def send_headlines(chat_id: int, context: ContextTypes.DEFAULT_TYPE, headl
 
 # === Handlers ===
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /start and spin up a personal news loop."""
     chat_id = update.effective_chat.id
     subscribers[chat_id] = True
 
-    # Welcome
     await context.bot.send_message(
         chat_id=chat_id,
-        text=(
-            "👋 Hello! I'm online and tracking news about Donald Trump, Jerome Powell, "
-            "Non-Farm Payrolls (NFP), and Consumer Price Index (CPI).\n\n"
-            "Here’s a sample of how updates look:"
-        ),
+        text="👋 Hello! I’ll track financial/economic news for you. Updates every 5 minutes.",
         parse_mode=ParseMode.HTML,
     )
 
-    # Sample
     sample = "CPI inflation report shows unexpected rise - https://example.com/news"
     await send_headlines(chat_id, context, [sample], limit=1)
 
-    # Start independent background loop for this user
     asyncio.create_task(news_loop(context, chat_id))
 
 async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Unsubscribe user (stop their loop)."""
     chat_id = update.effective_chat.id
     subscribers[chat_id] = False
     await context.bot.send_message(chat_id=chat_id, text="🛑 Stopped news updates for this chat.")
 
 async def nfp(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """On-demand NFP headlines (latest)."""
     chat_id = update.effective_chat.id
     headlines = aggregate_news(NFP_KEYWORDS)
     await context.bot.send_message(chat_id=chat_id, text="💼 Latest NFP headlines:")
     await send_headlines(chat_id, context, headlines, limit=5)
 
 async def cpi(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """On-demand CPI headlines (latest)."""
     chat_id = update.effective_chat.id
     headlines = aggregate_news(CPI_KEYWORDS)
     await context.bot.send_message(chat_id=chat_id, text="📊 Latest CPI headlines:")
@@ -203,12 +194,10 @@ async def cpi(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # === Per-user background loop ===
 async def news_loop(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
-    """Fetch & send news for one chat in a loop (includes NFP/CPI automatically)."""
     sent_articles: set[str] = set()
 
     while subscribers.get(chat_id, False):
         try:
-            # Watch broad set (includes Trump, Powell, NFP, CPI)
             headlines = aggregate_news(MASTER_KEYWORDS)
 
             for h in headlines:
@@ -229,8 +218,8 @@ async def news_loop(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
         except Exception as e:
             print("Error in loop:", e)
 
-        # Check every 30 minutes (adjust if you want it faster)
-        await asyncio.sleep(1800)
+        # Check every 5 minutes
+        await asyncio.sleep(300)
 
 # === Main ===
 def main():
