@@ -3,11 +3,12 @@ import os
 import pytz
 import json
 import asyncio
+import feedparser
 from dotenv import load_dotenv
 from datetime import datetime, timedelta
 from telegram import Update
 from telegram.constants import ParseMode
-from telegram.ext import Application, CommandHandler, ContextTypes, JobQueue
+from telegram.ext import Application, CommandHandler, ContextTypes
 from collections import defaultdict
 
 # === Load Environment Variables ===
@@ -21,9 +22,8 @@ NEWSDATA_KEY = os.getenv("NEWSDATA_KEY")
 
 # === Settings ===
 MASTER_KEYWORDS = [
-    "Donald Trump", "Jerome Powell", "Non-Farm Payrolls", "NFP",
-    "Consumer Price Index", "CPI", "Federal Reserve", "interest rates",
-    "economy", "stock market", "inflation", "unemployment"
+    "economy", "inflation", "Federal Reserve", "interest rates",
+    "stock market", "employment", "jobs", "CPI", "NFP"
 ]
 NFP_KEYWORDS = [
     "Non-Farm Payrolls", "NFP", "jobs report", "employment report",
@@ -36,10 +36,12 @@ CPI_KEYWORDS = [
 
 STORAGE_FILE = "news_storage.json"
 EXPIRY_DAYS = 3  # auto-expire storage after 3 days
-CHECK_INTERVAL = 1200  #20 minutes
+CHECK_INTERVAL = 600  # 10 minutes (reduced frequency to avoid rate limits)
 
 # Track user subscriptions
 subscribers = defaultdict(bool)
+# Track API usage to avoid rate limits
+api_last_used = defaultdict(float)
 
 # === Storage Helpers ===
 def load_storage() -> dict:
@@ -108,24 +110,59 @@ def filter_headlines(headlines: list[str], keywords: list[str]) -> list[str]:
     return [h for h in headlines if any(k in h.lower() for k in keywords_lower)]
 
 # === News Fetchers ===
+def fetch_news_rss(keywords: list[str]) -> list[str]:
+    """RSS fallback news fetcher - more reliable and no rate limits"""
+    rss_feeds = [
+        "https://rss.cnn.com/rss/money_news_economy.rss",
+        "https://feeds.bbci.co.uk/news/business/rss.xml",
+        "https://www.reutersagency.com/feed/?taxonomy=best-topics&post_type=best",
+        "https://www.bloomberg.com/feeds/podcasts/etf_report.xml",
+        "https://www.cnbc.com/id/10000664/device/rss/rss.html"
+    ]
+    
+    all_news = []
+    keywords_lower = [k.lower() for k in keywords]
+    
+    for feed_url in rss_feeds:
+        try:
+            feed = feedparser.parse(feed_url)
+            for entry in feed.entries[:10]:  # Limit to 10 entries per feed
+                title = entry.get('title', '')
+                link = entry.get('link', '')
+                if title and link and any(kw in title.lower() for kw in keywords_lower):
+                    all_news.append(f"{title} - {link}")
+                    print(f"RSS found: {title}")
+        except Exception as e:
+            print(f"Error fetching RSS feed {feed_url}: {e}")
+    
+    return all_news
+
 def fetch_news_newsapi(keywords: list[str]) -> list[str]:
+    """NewsAPI fetcher with rate limit check"""
     if not NEWSAPI_KEY:
-        print("NewsAPI key not found")
         return []
+    
+    # Check if we've used this API recently (rate limit protection)
+    current_time = datetime.now().timestamp()
+    if current_time - api_last_used.get('newsapi', 0) < 3600:  # 1 hour cooldown
+        print("Skipping NewsAPI due to rate limit cooldown")
+        return []
+    
     try:
-        from_date, to_date = get_date_range(3)
+        from_date, to_date = get_date_range(1)  # Reduce to 1 day to avoid too many results
         url = (
             f"https://newsapi.org/v2/everything?"
             f"q={' OR '.join(keywords)}&apiKey={NEWSAPI_KEY}&language=en"
-            f"&from={from_date}&to={to_date}&sortBy=publishedAt"
+            f"&from={from_date}&to={to_date}&sortBy=publishedAt&pageSize=10"
         )
-        response = requests.get(url, timeout=20)
+        response = requests.get(url, timeout=15)
         r = response.json()
         
         if r.get("status") == "error":
             print(f"NewsAPI Error: {r.get('message')}")
             return []
             
+        api_last_used['newsapi'] = current_time
         return [f"{a.get('title','').strip()} - {a.get('url','')}"
                 for a in r.get("articles", []) if a.get("title") and a.get("url")]
     except Exception as e:
@@ -134,17 +171,25 @@ def fetch_news_newsapi(keywords: list[str]) -> list[str]:
 
 def fetch_news_gnews(keywords: list[str]) -> list[str]:
     if not GNEWS_KEY:
-        print("GNews key not found")
         return []
+    
+    # Rate limit check
+    current_time = datetime.now().timestamp()
+    if current_time - api_last_used.get('gnews', 0) < 3600:
+        print("Skipping GNews due to rate limit cooldown")
+        return []
+    
     try:
-        from_date, to_date = get_date_range(3)
+        from_date, to_date = get_date_range(1)
         url = (
             f"https://gnews.io/api/v4/search?"
             f"q={' OR '.join(keywords)}&lang=en&token={GNEWS_KEY}"
-            f"&from={from_date}&to={to_date}"
+            f"&from={from_date}&to={to_date}&max=10"
         )
-        response = requests.get(url, timeout=20)
+        response = requests.get(url, timeout=15)
         r = response.json()
+        
+        api_last_used['gnews'] = current_time
         return [f"{a.get('title','').strip()} - {a.get('url','')}"
                 for a in r.get("articles", []) if a.get("title") and a.get("url")]
     except Exception as e:
@@ -153,17 +198,24 @@ def fetch_news_gnews(keywords: list[str]) -> list[str]:
 
 def fetch_news_mediastack(keywords: list[str]) -> list[str]:
     if not MEDIASTACK_KEY:
-        print("MediaStack key not found")
         return []
+    
+    current_time = datetime.now().timestamp()
+    if current_time - api_last_used.get('mediastack', 0) < 3600:
+        print("Skipping MediaStack due to rate limit cooldown")
+        return []
+    
     try:
-        from_date, to_date = get_date_range(3)
+        from_date, to_date = get_date_range(1)
         url = (
             f"http://api.mediastack.com/v1/news?"
             f"access_key={MEDIASTACK_KEY}&keywords={' OR '.join(keywords)}&languages=en"
-            f"&date={from_date},{to_date}"
+            f"&date={from_date},{to_date}&limit=10"
         )
-        response = requests.get(url, timeout=20)
+        response = requests.get(url, timeout=15)
         r = response.json()
+        
+        api_last_used['mediastack'] = current_time
         return [f"{a.get('title','').strip()} - {a.get('url','')}"
                 for a in r.get("data", []) if a.get("title") and a.get("url")]
     except Exception as e:
@@ -172,25 +224,30 @@ def fetch_news_mediastack(keywords: list[str]) -> list[str]:
 
 def fetch_news_newsdata(keywords: list[str]) -> list[str]:
     if not NEWSDATA_KEY:
-        print("NewsData.io key not found")
         return []
+    
+    current_time = datetime.now().timestamp()
+    if current_time - api_last_used.get('newsdata', 0) < 3600:
+        print("Skipping NewsData due to rate limit cooldown")
+        return []
+    
     try:
-        # NewsData.io uses a different date format
         to_date = datetime.now(pytz.UTC).strftime("%Y-%m-%d")
-        from_date = (datetime.now(pytz.UTC) - timedelta(days=3)).strftime("%Y-%m-%d")
+        from_date = (datetime.now(pytz.UTC) - timedelta(days=1)).strftime("%Y-%m-%d")
         
         url = (
             f"https://newsdata.io/api/1/news?"
             f"apikey={NEWSDATA_KEY}&q={' OR '.join(keywords)}&language=en"
-            f"&from_date={from_date}&to_date={to_date}"
+            f"&from_date={from_date}&to_date={to_date}&size=10"
         )
-        response = requests.get(url, timeout=20)
+        response = requests.get(url, timeout=15)
         r = response.json()
         
         if r.get("status") != "success":
-            print(f"NewsData.io Error: {r.get('results', [{}])[0].get('message', 'Unknown error')}")
+            print(f"NewsData.io Error: {r.get('message', 'Unknown error')}")
             return []
-            
+        
+        api_last_used['newsdata'] = current_time
         return [f"{a.get('title','').strip()} - {a.get('link','')}"
                 for a in r.get("results", []) if a.get("title") and a.get("link")]
     except Exception as e:
@@ -199,11 +256,29 @@ def fetch_news_newsdata(keywords: list[str]) -> list[str]:
 
 def aggregate_news(keywords: list[str]) -> list[str]:
     all_news = []
-    all_news.extend(fetch_news_newsapi(keywords))
-    all_news.extend(fetch_news_gnews(keywords))
-    all_news.extend(fetch_news_mediastack(keywords))
-    all_news.extend(fetch_news_newsdata(keywords))
     
+    print("Fetching news from RSS (primary source)...")
+    all_news.extend(fetch_news_rss(keywords))
+    
+    # Only use one paid API per cycle to avoid rate limits
+    apis = [
+        fetch_news_newsapi,
+        fetch_news_gnews, 
+        fetch_news_mediastack,
+        fetch_news_newsdata
+    ]
+    
+    # Try each API until we find one that works
+    for api in apis:
+        if len(all_news) < 5:  # If we don't have enough news yet
+            print(f"Trying {api.__name__}...")
+            results = api(keywords)
+            all_news.extend(results)
+            print(f"{api.__name__} returned {len(results)} results")
+        else:
+            break
+    
+    print(f"Total results: {len(all_news)}")
     deduped = dedupe_keep_order(all_news)
     return filter_headlines(deduped, keywords)
 
@@ -235,9 +310,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await context.bot.send_message(
         chat_id=chat_id,
-        text="👋 Hello! I'll track financial/economic news for you. Updates every 20 minutes. /help for more commands ",
+        text="👋 Hello! I'll track financial/economic news for you. Updates every 10 minutes.",
         parse_mode=ParseMode.HTML,
     )
+    
+    # Send immediate test news
+    await test_news(update, context)
 
 async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
@@ -256,6 +334,20 @@ async def cpi(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await context.bot.send_message(chat_id=chat_id, text="📊 Latest CPI headlines:")
     await send_headlines(chat_id, context, headlines, limit=5)
 
+async def test_news(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Test command to check news immediately"""
+    chat_id = update.effective_chat.id
+    await context.bot.send_message(chat_id=chat_id, text="🔄 Checking for news...")
+    
+    headlines = aggregate_news(MASTER_KEYWORDS)
+    await send_headlines(chat_id, context, headlines, limit=10)
+    
+    if not headlines:
+        await context.bot.send_message(
+            chat_id=chat_id, 
+            text="❌ No news found. This could be due to API limits or no recent news matching your keywords."
+        )
+
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     help_text = """
 🤖 Financial News Bot Help:
@@ -264,13 +356,10 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 /stop - Stop receiving news updates
 /nfp - Get latest Non-Farm Payrolls news
 /cpi - Get latest Consumer Price Index news
+/test - Test news fetching immediately
 /help - Show this help message
 
-I monitor multiple news sources for financial and economic news, with a focus on:
-- Federal Reserve announcements
-- Employment data (NFP)
-- Inflation data (CPI)
-- Market-moving economic indicators
+I monitor multiple news sources for financial and economic news.
 """
     await update.message.reply_text(help_text)
 
@@ -291,12 +380,12 @@ async def news_task(context: ContextTypes.DEFAULT_TYPE):
         headlines = aggregate_news(MASTER_KEYWORDS)
         new_headlines = [h for h in headlines if h not in storage]
         
+        print(f"Found {len(headlines)} total headlines, {len(new_headlines)} new headlines")
+        
         if not new_headlines:
-            print("No new headlines found")
+            print("No new headlines to send")
             return
             
-        print(f"Found {len(new_headlines)} new headlines")
-        
         for headline in new_headlines:
             sent = get_sentiment(headline)
             pr = get_priority(headline)
@@ -323,6 +412,12 @@ async def news_task(context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         print(f"Error in news task: {e}")
 
+# Error handler to catch the conflict error
+async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    print(f"Error: {context.error}")
+    if "Conflict" in str(context.error):
+        print("Multiple bot instances detected. Make sure only one instance is running.")
+
 # === Main ===
 def main():
     if not TELEGRAM_BOT_TOKEN:
@@ -331,14 +426,18 @@ def main():
         
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
     
+    # Add error handler
+    application.add_error_handler(error_handler)
+    
     # Add handlers
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("stop", stop))
     application.add_handler(CommandHandler("nfp", nfp))
     application.add_handler(CommandHandler("cpi", cpi))
+    application.add_handler(CommandHandler("test", test_news))
     application.add_handler(CommandHandler("help", help_command))
     
-    # Create background task
+    # Create background task with longer interval
     job_queue = application.job_queue
     if job_queue:
         job_queue.run_repeating(
