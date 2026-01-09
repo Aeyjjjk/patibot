@@ -11,7 +11,7 @@ from telegram.constants import ParseMode
 from telegram.ext import Application, CommandHandler, ContextTypes
 from collections import defaultdict
 
-# === Load Environment Variables ===
+
 load_dotenv()
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -20,7 +20,7 @@ GNEWS_KEY = os.getenv("GNEWS_KEY")
 MEDIASTACK_KEY = os.getenv("MEDIASTACK_KEY")
 NEWSDATA_KEY = os.getenv("NEWSDATA_KEY")
 
-# === Settings ===
+
 MASTER_KEYWORDS = [
     "economy", "inflation", "Federal Reserve", "interest rates",
     "stock market", "employment", "jobs", "CPI", "NFP"
@@ -43,7 +43,7 @@ subscribers = defaultdict(bool)
 # Track API usage to avoid rate limits
 api_last_used = defaultdict(float)
 
-# === Storage Helpers ===
+
 def load_storage() -> dict:
     if not os.path.exists(STORAGE_FILE):
         return {}
@@ -68,7 +68,7 @@ def mark_sent(storage: dict, headline: str):
     storage[headline] = {"timestamp": datetime.now(pytz.UTC).isoformat()}
     save_storage(storage)
 
-# === Helpers ===
+
 def get_date_range(days: int = 3) -> tuple[str, str]:
     to_date = datetime.now(pytz.UTC).strftime("%Y-%m-%d")
     from_date = (datetime.now(pytz.UTC) - timedelta(days=days)).strftime("%Y-%m-%d")
