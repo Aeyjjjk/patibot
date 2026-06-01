@@ -18,3 +18,4 @@ tornado==6.1
 tzdata==2024.1
 tzlocal==5.2
 urllib3==2.2.3
+//installed requirements(i) 
