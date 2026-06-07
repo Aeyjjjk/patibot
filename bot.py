@@ -40,7 +40,7 @@ CHECK_INTERVAL = 600  # 10 minutes (reduced frequency to avoid rate limits)
 
 # Track user subscriptions
 subscribers = defaultdict(bool)
-# Track API usage to avoid rate limits
+# Track APIs usage to avoid rate limits
 api_last_used = defaultdict(float)
 
 
