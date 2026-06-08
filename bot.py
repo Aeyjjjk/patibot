@@ -35,7 +35,7 @@ CPI_KEYWORDS = [
 ]
 
 STORAGE_FILE = "news_storage.json"
-EXPIRY_DAYS = 3  # auto-expire storage after 3 days
+EXPIRY_DAYS = 4  # auto-expire storage after 3 days
 CHECK_INTERVAL = 600  # 10 minutes (reduced frequency to avoid rate limits)
 
 # Track user subscriptions
