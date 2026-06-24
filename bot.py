@@ -30,7 +30,7 @@ NFP_KEYWORDS = [
     "payrolls", "BLS jobs", "unemployment rates", "wage growth"
 ]
 CPI_KEYWORDS = [
-    "Consumer Price Index", "CPI", "inflations", "inflation report",
+    "Consumer Price Index", "CPI", "inflation", "inflation reports",
     "inflation data", "price index", "consumer prices"
 ]
 
