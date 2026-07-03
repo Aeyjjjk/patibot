@@ -78,11 +78,11 @@ def get_sentiment(text: str) -> str:
     positive = ["gain", "growth", "rise", "optimistic", "positive", "bullish", "strong", "surge", "profit", "recovery", "rally"]
     negative = ["fall", "drop", "loss", "crisis", "bearish", "weak", "negative", "decline", "debt", "crash", "recession"]
     if any(w in text_l for w in positive):
-        return "🙂 Positive"
+        return " Positive"
     elif any(w in text_l for w in negative):
-        return "☹️ Negative"
+        return " Negative"
     else:
-        return "😐 Neutral"
+        return " Neutral"
 
 def get_priority(text: str) -> str:
     text_l = text.lower()
