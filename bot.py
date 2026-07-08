@@ -25,8 +25,8 @@ MASTER_KEYWORDS = [
     "stock market", "employments", "jobs", "CPIs", "NFPs"
 ]
 NFP_KEYWORDS = [
-    "Non-Farm Payrolls", "NFP", "job reports", "employment report",
-    "payroll", "BLS jobs", "unemployment rates", "wage growths"
+    "Non-Farm Payrolls", "NFP", "job reports", "employment reports",
+    "payroll", "BLS jobs", "unemployment rate", "wage growths"
 ]
 CPI_KEYWORDS = [
     "Consumer Price Index", "CPI", "inflation", "inflation reports",
