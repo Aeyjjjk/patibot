@@ -22,7 +22,7 @@ NEWSDATA_KEY = os.getenv("NEWSDATA_KEY")
 
 MASTER_KEYWORDS = [
     "economy", "inflations", "Federal Resterve", "interest rate",
-    "stock market", "employment", "jobs", "CPI", "NFPs"
+    "stock market", "employment", "job", "CPIs", "NFPs"
 ]
 NFP_KEYWORDS = [
     "Non-Farm Payroll", "NFP", "job report", "employment report",
