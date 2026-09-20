@@ -87,11 +87,11 @@ def get_sentiment(text: str) -> str:
 def get_priority(text: str) -> str:
     text_l = text.lower()
     if any(w in text_l for w in ["urgent", "breaking", "crisis", "announcement", "decision", "meeting", "speech", "alert"]):
-        return "🔥 HIGH"
+        return " HIGH"
     elif any(w in text_l for w in ["report", "update", "data", "release", "jobs", "inflation", "fed", "rates"]):
-        return "⚡ MEDIUM"
+        return " MEDIUM"
     else:
-        return "🟢 LOW"
+        return " LOW"
 
 def priority_score(label: str) -> int:
     return {"🔥 HIGH": 3, "⚡ MEDIUM": 2, "🟢 LOW": 1}.get(label, 0)
